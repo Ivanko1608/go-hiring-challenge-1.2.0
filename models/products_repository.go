@@ -8,6 +8,8 @@ import (
 	"gorm.io/gorm"
 )
 
+// ProductFilter narrows and paginates a product listing. Zero-valued fields
+// (empty CategoryCode, invalid PriceLessThan) mean "don't filter by this".
 type ProductFilter struct {
 	Offset        int
 	Limit         int
