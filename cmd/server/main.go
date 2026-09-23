@@ -8,12 +8,18 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/mytheresa/go-hiring-challenge/app/catalog"
+	"github.com/mytheresa/go-hiring-challenge/app/categories"
 	"github.com/mytheresa/go-hiring-challenge/app/database"
 	"github.com/mytheresa/go-hiring-challenge/models"
 )
+
+// How long in-flight requests get to finish after SIGINT/SIGTERM before the
+// server closes their connections.
+const shutdownTimeout = 10 * time.Second
 
 func main() {
 	// Load environment variables from .env file
@@ -35,12 +41,17 @@ func main() {
 	defer close()
 
 	// Initialize handlers
-	prodRepo := models.NewProductsRepository(db)
-	cat := catalog.NewCatalogHandler(prodRepo)
+	productsRepo := models.NewProductsRepository(db)
+	catalogHandler := catalog.NewHandler(productsRepo)
+	categoriesRepo := models.NewCategoriesRepository(db)
+	categoriesHandler := categories.NewHandler(categoriesRepo)
 
 	// Set up routing
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /catalog", cat.HandleGet)
+	mux.HandleFunc("GET /catalog", catalogHandler.List)
+	mux.HandleFunc("GET /catalog/{code}", catalogHandler.Get)
+	mux.HandleFunc("GET /categories", categoriesHandler.List)
+	mux.HandleFunc("POST /categories", categoriesHandler.Create)
 
 	// Set up the HTTP server
 	srv := &http.Server{
@@ -54,12 +65,19 @@ func main() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server failed: %s", err)
 		}
-
-		log.Println("Server stopped gracefully")
 	}()
 
 	<-ctx.Done()
-	log.Println("Shutting down server...")
-	srv.Shutdown(ctx)
 	stop()
+	log.Println("Shutting down server...")
+
+	// ctx is already cancelled here, so draining in-flight requests needs a fresh deadline.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("Server shutdown failed: %s", err)
+		return
+	}
+
+	log.Println("Server stopped gracefully")
 }
